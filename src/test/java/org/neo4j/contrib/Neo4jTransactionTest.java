@@ -2,6 +2,7 @@ package org.neo4j.contrib;
 
 import org.junit.Rule;
 import org.junit.Test;
+import org.neo4j.graphalgo.BasicEvaluationContext;
 import org.neo4j.graphalgo.GraphAlgoFactory;
 import org.neo4j.graphalgo.WeightedPath;
 import org.neo4j.graphdb.Direction;
@@ -12,9 +13,12 @@ import org.neo4j.graphdb.PathExpanders;
 import org.neo4j.graphdb.Relationship;
 import org.neo4j.graphdb.RelationshipType;
 import org.neo4j.graphdb.Transaction;
-import org.neo4j.harness.junit.Neo4jRule;
-import org.neo4j.helpers.collection.Iterators;
-import org.neo4j.helpers.collection.MapUtil;
+import org.neo4j.harness.junit.rule.Neo4jRule;
+import org.neo4j.internal.helpers.collection.Iterables;
+import org.neo4j.internal.helpers.collection.Iterators;
+import org.neo4j.internal.helpers.collection.MapUtil;
+
+import java.util.Collections;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
@@ -26,72 +30,82 @@ public class Neo4jTransactionTest {
 
     @Test
     public void cypherParameterTest() {
-        GraphDatabaseService db = neo4j.getGraphDatabaseService();
-        db.execute("CREATE (p:Person{name:{name}})", MapUtil.map("name", "John"));
+        GraphDatabaseService db = neo4j.defaultDatabaseService();
+        db.executeTransactionally("CREATE (p:Person{name:$name})", MapUtil.map("name", "John"));
 
-        String name = (String) Iterators.single(db.execute("MATCH (p:Person) return p.name as name")).get("name");
+        String name = singleResultFirstColumn(db, "MATCH (p:Person) return p.name as name");
+        assertEquals("John", name);
+    }
+
+    private <T> T singleResultFirstColumn(GraphDatabaseService db, String cypher) {
+        return db.executeTransactionally(cypher, Collections.emptyMap(), result -> {
+            String firstColumnName = Iterables.first(result.columns());
+            return Iterators.single(result.columnAs(firstColumnName));
+        });
     }
 
     @Test
     public void nestedTransaction() {
-        GraphDatabaseService db = neo4j.getGraphDatabaseService();
+        GraphDatabaseService db = neo4j.defaultDatabaseService();
         try (Transaction tx = db.beginTx()) {
 
             System.out.println(tx.getClass().getName());
-            Node node = db.createNode();
+            Node node = tx.createNode();
             node.setProperty("name", "node1");
 
             try (Transaction innerTx = db.beginTx()) {
                 System.out.println(innerTx.getClass().getName());
-                Node innerNode = db.createNode();
+                Node innerNode = tx.createNode();
                 innerNode.setProperty("name", "node2");
 
-                innerTx.success();  // change to .failure()
+                innerTx.commit();  // change to .failure()
             }
 
-            tx.success();
+            tx.commit();
         }
 
-        long count = (long) Iterators.single(db.execute("MATCH (n) RETURN count(n) AS count")).get("count");
+        long count = singleResultFirstColumn(db, "MATCH (n) RETURN count(n) AS count");
         assertEquals(2L, count);
     }
 
     @Test
     public void shareInstancesBetweenTransactions() {
 
-        GraphDatabaseService db = neo4j.getGraphDatabaseService();
-        db.execute("CREATE (:Person{name:1})-[:KNOWS]->(:Person{name:2})");
+        GraphDatabaseService db = neo4j.defaultDatabaseService();
+        db.executeTransactionally("CREATE (:Person{name:1})-[:KNOWS]->(:Person{name:2})");
 
         Node person1;
         try (Transaction tx = db.beginTx()) {
-            person1 = db.findNode(Label.label("Person"), "name", 1);
+            person1 = tx.findNode(Label.label("Person"), "name", 1);
 
-            tx.success();
+            tx.commit();
         }
         assertNotNull(person1);
 
         try (Transaction tx = db.beginTx()) {
+            person1 = tx.getNodeById(person1.getId());
             Relationship rel = person1.getSingleRelationship(RelationshipType.withName("KNOWS"), Direction.OUTGOING);
             Node person2 = rel.getEndNode();
 
             assertEquals(2L, person2.getProperty("name"));
 
-            tx.success();
+            tx.commit();
         }
     }
 
     @Test
     public void algoTest() {
-        GraphDatabaseService db = neo4j.getGraphDatabaseService();
-        db.execute("CREATE (a:City{name:'a'})-[:ROAD{d:5}]->(:City{name:'b'})-[:ROAD{d:2}]->(c:City{name:'c'}), " +
+        GraphDatabaseService db = neo4j.defaultDatabaseService();
+        db.executeTransactionally("CREATE (a:City{name:'a'})-[:ROAD{d:5}]->(:City{name:'b'})-[:ROAD{d:2}]->(c:City{name:'c'}), " +
                 "(a)-[:ROAD{d:10}]->(c)");
 
         try (Transaction tx = db.beginTx()) {
 
-            Node start = db.findNode( Label.label("City"), "name", "a");
-            Node end = db.findNode( Label.label("City"), "name", "c");
+            Node start = tx.findNode( Label.label("City"), "name", "a");
+            Node end = tx.findNode( Label.label("City"), "name", "c");
 
             Iterable<WeightedPath> paths = GraphAlgoFactory.dijkstra(
+                    new BasicEvaluationContext(tx, db),
                     PathExpanders.allTypesAndDirections(),
                     "d"
             ).findAllPaths(start, end);
@@ -101,7 +115,7 @@ public class Neo4jTransactionTest {
                 assertEquals(7.0, path.weight(), 0.0001);
             }
 
-            tx.success();
+            tx.commit();
         }
 
     }
