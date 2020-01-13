@@ -4,6 +4,7 @@ import org.junit.Rule;
 import org.junit.Test;
 import org.neo4j.graphalgo.GraphAlgoFactory;
 import org.neo4j.graphalgo.WeightedPath;
+import org.neo4j.graphdb.DependencyResolver;
 import org.neo4j.graphdb.Direction;
 import org.neo4j.graphdb.GraphDatabaseService;
 import org.neo4j.graphdb.Label;
@@ -15,6 +16,9 @@ import org.neo4j.graphdb.Transaction;
 import org.neo4j.harness.junit.Neo4jRule;
 import org.neo4j.helpers.collection.Iterators;
 import org.neo4j.helpers.collection.MapUtil;
+import org.neo4j.kernel.impl.core.EmbeddedProxySPI;
+import org.neo4j.kernel.impl.core.GraphPropertiesProxy;
+import org.neo4j.kernel.internal.GraphDatabaseAPI;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
@@ -105,4 +109,25 @@ public class Neo4jTransactionTest {
         }
 
     }
+
+    @Test
+    public void graphProperties() {
+        GraphDatabaseService db = neo4j.getGraphDatabaseService();
+        GraphDatabaseAPI api = (GraphDatabaseAPI) db;
+        GraphPropertiesProxy graphProperties = api.getDependencyResolver()
+                .resolveDependency(EmbeddedProxySPI.class, DependencyResolver.SelectionStrategy.FIRST)
+                .newGraphPropertiesProxy();
+
+        try (Transaction tx = db.beginTx()) {
+            graphProperties.setProperty("hello", "world");
+            tx.success();
+        }
+
+        try (Transaction tx = db.beginTx()) {
+            assertEquals("world",  graphProperties.getProperty("hello"));
+            tx.success();
+        }
+
+    }
+
 }

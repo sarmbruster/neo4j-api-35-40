@@ -1,0 +1,6 @@
+= neo4j-api-35-40
+
+This project shows some of the api changes from Neo4j 3.5 -> 4.0. The `master` branch is for 3.5, the updated code for 4.0
+is located in the `4.0` branch.
+
+
